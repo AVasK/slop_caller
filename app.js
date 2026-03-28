@@ -9,6 +9,109 @@ import { createPeerConnection as createPcBase, ICE_SERVERS } from "./js/peerConn
 const DISPLAY_NAME_KEY = "vcall.displayName";
 const SIG_CONNECT_TIMEOUT_MS = 8000;
 
+// ---------------------------------------------------------------------------
+// i18n — detect browser language, fall back to English
+// ---------------------------------------------------------------------------
+
+const TRANSLATIONS = {
+  en: {
+    // Lobby
+    namePlaceholder:   "Your name",
+    startSession:      "Start a session",
+    joinSession:       "Join a session",
+    cancelJoin:        "Cancel",
+    sessionCodePlaceholder: "Session code",
+    joinBtn:           "Join",
+    // Session-waiting panel
+    sessionReady:      "Session ready",
+    shareHint:         "Share the code or link with who you want to call",
+    copyLink:          "Copy link",
+    cancel:            "Cancel",
+    // In-call UI
+    micLabel:          "Mic",
+    youLabel:          "You",
+    chatTitle:         "Chat",
+    messagePlaceholder: "Message…",
+    // Toasts
+    requestingMic:     "Requesting microphone…",
+    micError:          (m) => `Microphone: ${m}`,
+    startingCamera:    "Starting camera…",
+    cameraError:       (m) => `Could not open camera: ${m}`,
+    cameraOn:          "Camera on",
+    cameraOff:         "Camera off",
+    micOn:             "Mic on",
+    micMuted:          "Mic muted",
+    callEnded:         "Call ended",
+    peerLeft:          "The other person left the call",
+    linkCopied:        "Link copied",
+    copyManually:      "Select the field and copy manually",
+    chatNotReady:      "Chat not ready yet",
+    enterValidCode:    "Enter a valid session code",
+    roomFull:          "Invalid or expired session code",
+    signalingError:    "Signaling error",
+    connectionState:   (s) => `Connection ${s}`,
+    // Status / RTC bar
+    startingMic:       "Starting microphone…",
+    noMic:             "No microphone — you can still share your camera.",
+    connectingSignaling: "Connecting to signaling server…",
+    waitingForPeer:    "Waiting for peer to join…",
+    connecting:        "Connecting…",
+    rtcUpdating:       "WebRTC: updating media…",
+    rtcOfferSent:      "WebRTC: offer sent",
+    rtcAnswerSent:     "WebRTC: answer sent",
+    rtcWaiting:        "Waiting for peer…",
+    rtcPairing:        "Pairing…",
+    rtcUnreachable:    "Signaling unreachable",
+  },
+  ru: {
+    namePlaceholder:   "Ваше имя",
+    startSession:      "Начать сессию",
+    joinSession:       "Войти в сессию",
+    cancelJoin:        "Отмена",
+    sessionCodePlaceholder: "Код сессии",
+    joinBtn:           "Войти",
+    sessionReady:      "Сессия готова",
+    shareHint:         "Поделитесь кодом или ссылкой с собеседником",
+    copyLink:          "Копировать ссылку",
+    cancel:            "Отмена",
+    micLabel:          "Микр.",
+    youLabel:          "Вы",
+    chatTitle:         "Чат",
+    messagePlaceholder: "Сообщение…",
+    requestingMic:     "Запрос микрофона…",
+    micError:          (m) => `Микрофон: ${m}`,
+    startingCamera:    "Включение камеры…",
+    cameraError:       (m) => `Не удалось открыть камеру: ${m}`,
+    cameraOn:          "Камера включена",
+    cameraOff:         "Камера выключена",
+    micOn:             "Микрофон включён",
+    micMuted:          "Микрофон выключен",
+    callEnded:         "Звонок завершён",
+    peerLeft:          "Собеседник покинул звонок",
+    linkCopied:        "Ссылка скопирована",
+    copyManually:      "Выделите поле и скопируйте вручную",
+    chatNotReady:      "Чат ещё не готов",
+    enterValidCode:    "Введите корректный код сессии",
+    roomFull:          "Неверный или устаревший код сессии",
+    signalingError:    "Ошибка сигнального сервера",
+    connectionState:   (s) => `Соединение: ${s}`,
+    startingMic:       "Запрос микрофона…",
+    noMic:             "Нет микрофона — можно включить камеру.",
+    connectingSignaling: "Подключение к серверу…",
+    waitingForPeer:    "Ожидание собеседника…",
+    connecting:        "Подключение…",
+    rtcUpdating:       "WebRTC: обновление медиа…",
+    rtcOfferSent:      "WebRTC: оффер отправлен",
+    rtcAnswerSent:     "WebRTC: ответ отправлен",
+    rtcWaiting:        "Ожидание…",
+    rtcPairing:        "Соединение…",
+    rtcUnreachable:    "Сигнальный сервер недоступен",
+  },
+};
+
+const LANG = (navigator.language || "en").toLowerCase().startsWith("ru") ? "ru" : "en";
+const T = TRANSLATIONS[LANG];
+
 // Production signaling server URL.
 // Set this to your deployed Fly.io address after running `fly deploy`, e.g.:
 //   "wss://vcall-signal.fly.dev"
@@ -335,6 +438,28 @@ function showToast(msg, ms = 2200) {
   showToast._t = setTimeout(() => statusToast.classList.remove("visible"), ms);
 }
 
+function applyTranslations() {
+  document.documentElement.lang = LANG;
+  if (btnStartSession)     btnStartSession.textContent     = T.startSession;
+  if (btnShowJoin)         btnShowJoin.textContent         = T.joinSession;
+  if (btnJoinSession)      btnJoinSession.textContent      = T.joinBtn;
+  if (btnCopySessionLink)  btnCopySessionLink.textContent  = T.copyLink;
+  if (btnCancelSession)    btnCancelSession.textContent    = T.cancel;
+  if (displayNameInput)    displayNameInput.placeholder    = T.namePlaceholder;
+  if (joinCodeInput)       joinCodeInput.placeholder       = T.sessionCodePlaceholder;
+  if (chatInputField)      chatInputField.placeholder      = T.messagePlaceholder;
+  const sessionReadyTitle = sessionWaiting?.querySelector(".lobby-title");
+  if (sessionReadyTitle)   sessionReadyTitle.textContent   = T.sessionReady;
+  const shareHintEl = sessionWaiting?.querySelector(".session-share-hint");
+  if (shareHintEl)         shareHintEl.textContent         = T.shareHint;
+  const micLabelEl = document.getElementById("mic-meter-label");
+  if (micLabelEl)          micLabelEl.textContent          = T.micLabel;
+  const youLabelEl = document.querySelector(".audio-only-you");
+  if (youLabelEl)          youLabelEl.textContent          = T.youLabel;
+  const chatTitleEl = document.querySelector(".chat-title");
+  if (chatTitleEl)         chatTitleEl.textContent         = T.chatTitle;
+}
+
 // ---------------------------------------------------------------------------
 // Chat — RTCDataChannel
 // ---------------------------------------------------------------------------
@@ -358,7 +483,7 @@ function appendChatMsg(text, from, isSelf) {
   wrap.className = "chat-msg " + (isSelf ? "chat-msg-self" : "chat-msg-peer");
   const nameEl = document.createElement("span");
   nameEl.className = "chat-msg-name";
-  nameEl.textContent = isSelf ? "You" : from;
+  nameEl.textContent = isSelf ? T.youLabel : from;
   const textEl = document.createElement("p");
   textEl.className = "chat-msg-text";
   textEl.textContent = text;
@@ -401,7 +526,7 @@ function sendChatMessage() {
   const text = (chatInputField?.value ?? "").trim();
   if (!text) return;
   if (!chatChannel || chatChannel.readyState !== "open") {
-    showToast("Chat not ready yet", 2500);
+    showToast(T.chatNotReady, 2500);
     return;
   }
   chatChannel.send(JSON.stringify({ text, from: getLocalDisplayName() }));
@@ -423,7 +548,7 @@ function cleanupChat() {
 // ---------------------------------------------------------------------------
 
 function returnToSessionCreation(opts = {}) {
-  const toastMsg = opts.toast != null ? opts.toast : "Call ended";
+  const toastMsg = opts.toast != null ? opts.toast : T.callEnded;
   const toastMs = opts.toastMs != null ? opts.toastMs : 2800;
   cleanupChat();
   stopTracks();
@@ -573,7 +698,7 @@ function makePeerConnection() {
         applyUiState({ kind: UiState.LIVE });
         updateCallLayout();
       }
-      if (s === "failed" || s === "disconnected") showToast("Connection " + s, 3500);
+      if (s === "failed" || s === "disconnected") showToast(T.connectionState(s), 3500);
     },
   });
 }
@@ -646,7 +771,7 @@ async function renegotiate() {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     sigWs.send(JSON.stringify({ type: "offer", sdp: pc.localDescription.sdp }));
-    setRtcStatus("WebRTC: updating media…");
+    setRtcStatus(T.rtcUpdating);
   } catch (e) {
     console.warn("renegotiate", e);
   }
@@ -719,7 +844,7 @@ async function startAsOfferer() {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   sigWs.send(JSON.stringify({ type: "offer", sdp: pc.localDescription.sdp }));
-  setRtcStatus("WebRTC: offer sent");
+  setRtcStatus(T.rtcOfferSent);
 }
 
 async function handleIncomingOffer(sdpText) {
@@ -736,7 +861,7 @@ async function handleIncomingOffer(sdpText) {
   await pc.setLocalDescription(answer);
   sigWs.send(JSON.stringify({ type: "answer", sdp: pc.localDescription.sdp }));
   // Don't overwrite "connected" status during a renegotiation offer
-  if (!peerConnected) setRtcStatus("WebRTC: answer sent");
+  if (!peerConnected) setRtcStatus(T.rtcAnswerSent);
 }
 
 async function handleIncomingAnswer(sdpText) {
@@ -772,7 +897,7 @@ function connectSignaling() {
   teardownPeerConnection();
   updateCallControlsVisibility();
   const url = signalUrl();
-  setRtcStatus(`Signaling: connecting… (${url})`);
+  setRtcStatus(`Signaling: connecting… (${url})`); // URL kept for debug; not translated
   try {
     sigWs = new WebSocket(url);
   } catch {
@@ -788,7 +913,7 @@ function connectSignaling() {
   sigConnectTimer = setTimeout(() => {
     if (!sigOpened && sigWs && sigWs.readyState !== WebSocket.OPEN) {
       showSignalingUnreachableOnce(url);
-      setRtcStatus("Signaling unreachable");
+      setRtcStatus(T.rtcUnreachable);
       try { sigWs.close(); } catch { /* ignore */ }
     }
     sigConnectTimer = null;
@@ -807,12 +932,16 @@ function connectSignaling() {
     try { msg = JSON.parse(ev.data); } catch { return; }
 
     if (msg.type === "joined") {
-      if (msg.peers < 2) setWaitingStatus("Waiting for peer to join…");
-      setRtcStatus(msg.peers < 2 ? "Waiting for peer…" : "Pairing…");
+      if (msg.peers < 2) setWaitingStatus(T.waitingForPeer);
+      setRtcStatus(msg.peers < 2 ? T.rtcWaiting : T.rtcPairing);
       return;
     }
     if (msg.type === "error") {
-      showToast(msg.message || "Signaling error", 4000);
+      if (msg.message === "room full") {
+        returnToSessionCreation({ toast: T.roomFull, toastMs: 5000 });
+      } else {
+        showToast(msg.message || T.signalingError, 4000);
+      }
       return;
     }
     if (msg.type === "peer-info") {
@@ -822,12 +951,12 @@ function connectSignaling() {
       return;
     }
     if (msg.type === "peer") {
-      setWaitingStatus("Connecting…");
+      setWaitingStatus(T.connecting);
       if (msg.role === "offer") await startAsOfferer();
       return;
     }
     if (msg.type === "peer-left") {
-      returnToSessionCreation({ toast: "The other person left the call", toastMs: 3800 });
+      returnToSessionCreation({ toast: T.peerLeft, toastMs: 3800 });
       return;
     }
     if (msg.type === "offer" && msg.sdp) { await handleIncomingOffer(msg.sdp); return; }
@@ -842,7 +971,7 @@ function connectSignaling() {
     sigWs = null;
     if (!sigOpened) {
       showSignalingUnreachableOnce(url);
-      setRtcStatus("Signaling unreachable");
+      setRtcStatus(T.rtcUnreachable);
     } else if (!pc) {
       setRtcStatus("");
     }
@@ -862,14 +991,14 @@ async function startMic() {
   if (stream) return true;
   const err = getMediaAccessError();
   if (err) { showToast(err.toast, 8000); return false; }
-  showToast("Requesting microphone…");
+  showToast(T.requestingMic);
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true },
       video: false,
     });
   } catch (e) {
-    showToast("Microphone: " + (e?.message ?? String(e)), 6000);
+    showToast(T.micError(e?.message ?? String(e)), 6000);
     return false;
   }
   setupMicMeterFromStream(stream);
@@ -886,7 +1015,7 @@ async function startMic() {
 async function addCameraTrack() {
   const err = getMediaAccessError();
   if (err) { showToast(err.toast, 8000); return; }
-  showToast("Starting camera…");
+  showToast(T.startingCamera);
 
   let videoTrack;
   try {
@@ -899,7 +1028,7 @@ async function addCameraTrack() {
       const vs2 = await navigator.mediaDevices.getUserMedia({ video: true });
       [videoTrack] = vs2.getVideoTracks();
     } catch (e2) {
-      showToast("Could not open camera: " + (e2?.message ?? String(e2)), 6000);
+      showToast(T.cameraError(e2?.message ?? String(e2)), 6000);
       return;
     }
   }
@@ -952,7 +1081,7 @@ async function addCameraTrack() {
     btnCamera.setAttribute("aria-pressed", "true");
   }
   updateCallLayout();
-  showToast("Camera on");
+  showToast(T.cameraOn);
 }
 
 /**
@@ -981,7 +1110,7 @@ async function removeCameraTrack() {
     btnCamera.setAttribute("aria-pressed", "false");
   }
   updateCallLayout();
-  showToast("Camera off");
+  showToast(T.cameraOff);
 }
 
 async function toggleCamera() {
@@ -1062,24 +1191,24 @@ async function startSession() {
   if (getSessionFromUrl()) return;
   const key = generateSessionKey();
   setSessionInUrl(key);
-  applyUiState({ kind: UiState.WAITING, code: key, status: "Starting microphone…" });
+  applyUiState({ kind: UiState.WAITING, code: key, status: T.startingMic });
   const micOk = await startMic();
-  setWaitingStatus(micOk ? "Connecting to signaling server…" : "No microphone — you can still share your camera.");
+  setWaitingStatus(micOk ? T.connectingSignaling : T.noMic);
   connectSignaling();
 }
 
 async function joinSession() {
   const code = (joinCodeInput?.value ?? "").trim().replace(/\D/g, "");
   if (!code || code.length < 4) {
-    showToast("Enter a valid session code", 3000);
+    showToast(T.enterValidCode, 3000);
     joinCodeInput?.focus();
     return;
   }
   if (getSessionFromUrl() === code) return;
   setSessionInUrl(code);
-  applyUiState({ kind: UiState.JOINING, status: "Starting microphone…" });
+  applyUiState({ kind: UiState.JOINING, status: T.startingMic });
   const micOk = await startMic();
-  if (!micOk) setWaitingStatus("No microphone — you can still share your camera.");
+  if (!micOk) setWaitingStatus(T.noMic);
   connectSignaling();
 }
 
@@ -1095,10 +1224,10 @@ btnMic.addEventListener("click", () => {
   audioTracks.forEach((t) => { t.enabled = enabled; });
   btnMic.classList.toggle("muted", !enabled);
   btnMic.setAttribute("aria-pressed", String(!enabled));
-  showToast(enabled ? "Mic on" : "Mic muted");
+  showToast(enabled ? T.micOn : T.micMuted);
 });
 
-btnHangup.addEventListener("click", () => returnToSessionCreation({ toast: "Call ended" }));
+btnHangup.addEventListener("click", () => returnToSessionCreation({ toast: T.callEnded }));
 
 if (btnCancelSession) {
   btnCancelSession.addEventListener("click", () => returnToSessionCreation({ toast: "" }));
@@ -1108,12 +1237,12 @@ if (btnCamera) btnCamera.addEventListener("click", () => toggleCamera());
 
 if (btnStartSession) btnStartSession.addEventListener("click", () => startSession());
 
-if (btnShowJoin) {
+  if (btnShowJoin) {
   btnShowJoin.addEventListener("click", () => {
     if (!joinCodeForm) return;
     const open = !joinCodeForm.hidden;
     joinCodeForm.hidden = open;
-    btnShowJoin.textContent = open ? "Join a session" : "Cancel";
+    btnShowJoin.textContent = open ? T.joinSession : T.cancelJoin;
     if (!open) joinCodeInput?.focus();
   });
 }
@@ -1134,9 +1263,9 @@ if (btnCopySessionLink) {
     if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
-      showToast("Link copied", 2000);
+      showToast(T.linkCopied, 2000);
     } catch {
-      showToast("Select the field and copy manually", 3000);
+      showToast(T.copyManually, 3000);
     }
   });
 }
@@ -1173,17 +1302,18 @@ if (chatForm) {
 // ---------------------------------------------------------------------------
 
 async function boot() {
+  applyTranslations();
   const mediaErr = getMediaAccessError();
 
   if (getSessionFromUrl()) {
     // Opened via shared link — auto-join as the other party
     updateCallLayout();
-    applyUiState({ kind: UiState.JOINING, status: "Starting microphone…" });
+    applyUiState({ kind: UiState.JOINING, status: T.startingMic });
     if (mediaErr) {
       showToast(mediaErr.toast, 8000);
     } else {
       const micOk = await startMic();
-      if (!micOk) setWaitingStatus("No microphone — you can still share your camera.");
+      if (!micOk) setWaitingStatus(T.noMic);
     }
     connectSignaling();
     return;

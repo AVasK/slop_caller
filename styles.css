@@ -18,16 +18,21 @@ html,
 body {
   margin: 0;
   height: 100%;
+  /* dvh tracks the visible viewport on iOS Safari (collapses with address bar).
+     Falls back to 100% on older browsers. */
+  height: 100dvh;
   font-family: "SF Pro Text", system-ui, -apple-system, Segoe UI, sans-serif;
   background: var(--bg);
   color: var(--text);
   overflow: hidden;
+  overscroll-behavior: none; /* prevent iOS rubber-band bounce shifting layout */
 }
 
 #app {
   position: relative;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
