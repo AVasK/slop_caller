@@ -9,6 +9,12 @@ import { createPeerConnection as createPcBase, ICE_SERVERS } from "./js/peerConn
 const DISPLAY_NAME_KEY = "vcall.displayName";
 const SIG_CONNECT_TIMEOUT_MS = 8000;
 
+// Production signaling server URL.
+// Set this to your deployed Fly.io address after running `fly deploy`, e.g.:
+//   "wss://vcall-signal.fly.dev"
+// Leave empty to fall back to auto-detection (localhost dev) or ?signal= query param.
+const SIGNAL_URL = "wss://vcall-signal.fly.dev";
+
 // ---------------------------------------------------------------------------
 // Triple-buffer swapchain for native frame consumers (window.__vcallSwapchain)
 // ---------------------------------------------------------------------------
@@ -218,6 +224,7 @@ function wsHostFromLocation() {
 }
 
 function signalUrl() {
+  if (SIGNAL_URL) return SIGNAL_URL;
   const params = new URLSearchParams(location.search);
   const custom = params.get("signal");
   if (custom) return custom;
