@@ -974,3 +974,145 @@ body {
   fill: currentColor;
   stroke: none;
 }
+
+/* Attachment button */
+.btn-attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.btn-attach:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: var(--text);
+}
+
+.btn-attach:active {
+  transform: scale(0.93);
+}
+
+.btn-attach svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* File message bubble — shares the same look as .chat-msg-text */
+.chat-msg-file {
+  padding: 10px 12px;
+  border-radius: 14px;
+  min-width: 160px;
+}
+
+.chat-msg-self .chat-msg-file {
+  background: linear-gradient(145deg, rgba(61, 111, 217, 0.75), rgba(45, 85, 180, 0.7));
+  color: #dce8ff;
+  border-bottom-right-radius: 5px;
+}
+
+.chat-msg-peer .chat-msg-file {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border-bottom-left-radius: 5px;
+}
+
+/* Image bubbles get zero padding so the photo fills edge-to-edge */
+.chat-msg-file--image {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* File info row: icon + name + size */
+.file-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.file-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.7;
+}
+
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+
+.file-size-text {
+  font-size: 0.73rem;
+  opacity: 0.6;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Transfer progress bar */
+.file-progress {
+  height: 3px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.file-progress-fill {
+  height: 100%;
+  background: rgba(91, 140, 255, 0.85);
+  border-radius: 3px;
+  transition: width 0.12s ease;
+}
+
+/* Download link */
+.file-dl-btn {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(130, 175, 255, 0.95);
+  text-decoration: none;
+}
+
+.file-dl-btn:hover {
+  color: #a8c8ff;
+  text-decoration: underline;
+}
+
+/* Inline image preview */
+.chat-img-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.chat-msg-file--image .chat-img-preview {
+  border-radius: 14px;
+}

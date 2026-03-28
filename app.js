@@ -46,6 +46,8 @@ const TRANSLATIONS = {
     linkCopied:        "Link copied",
     copyManually:      "Select the field and copy manually",
     chatNotReady:      "Chat not ready yet",
+    fileTooLarge:      "File too large — max 25 MB",
+    download:          "Download",
     enterValidCode:    "Enter a valid session code",
     roomFull:          "Invalid or expired session code",
     signalingError:    "Signaling error",
@@ -91,6 +93,8 @@ const TRANSLATIONS = {
     linkCopied:        "Ссылка скопирована",
     copyManually:      "Выделите поле и скопируйте вручную",
     chatNotReady:      "Чат ещё не готов",
+    fileTooLarge:      "Файл слишком большой — макс. 25 МБ",
+    download:          "Скачать",
     enterValidCode:    "Введите корректный код сессии",
     roomFull:          "Неверный или устаревший код сессии",
     signalingError:    "Ошибка сигнального сервера",
@@ -203,6 +207,8 @@ const chatForm = document.getElementById("chat-form");
 const chatBadge = document.getElementById("chat-badge");
 const btnChat = document.getElementById("btn-chat");
 const btnChatClose = document.getElementById("btn-chat-close");
+const btnAttach = document.getElementById("btn-attach");
+const fileInput = document.getElementById("file-input");
 
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const appEl = document.getElementById("app");
@@ -256,6 +262,16 @@ let netPrevRtp = { packetsLost: 0, packetsReceived: 0 };
 let chatChannel = null;
 let chatOpen = false;
 let chatUnread = 0;
+
+// File transfer
+const FILE_CHUNK_SIZE  = 16 * 1024;       // 16 KB per chunk — safe across all browsers
+const FILE_MAX_SIZE    = 25 * 1024 * 1024; // 25 MB hard cap
+const FILE_BUFFER_HIGH = 1 * 1024 * 1024;  // 1 MB — pause sending if bufferedAmount exceeds this
+
+/** @type {{ name:string, size:number, type:string, totalChunks:number, chunks:ArrayBuffer[], receivedChunks:number, uiRef:{bubble:HTMLElement,progressFill:HTMLElement}|null }|null} */
+let incomingTransfer = null;
+/** Object URLs created for received/sent files — revoked on cleanupChat() */
+let transferObjectUrls = [];
 
 // ---------------------------------------------------------------------------
 // UI state — discriminated union
@@ -545,13 +561,26 @@ function stopNetQualityPolling() {
 // ---------------------------------------------------------------------------
 
 function setupChatChannel(ch) {
-  ch.onclose = () => { chatChannel = null; };
-  ch.onerror = () => { chatChannel = null; };
+  ch.binaryType = "arraybuffer";
+  ch.onclose = () => { chatChannel = null; incomingTransfer = null; };
+  ch.onerror = () => { chatChannel = null; incomingTransfer = null; };
   ch.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      handleFileChunk(ev.data);
+      return;
+    }
     try {
-      const { text, from } = JSON.parse(ev.data);
-      if (typeof text === "string" && text.trim()) {
-        appendChatMsg(text.trim(), from || "Peer", false);
+      const msg = JSON.parse(ev.data);
+      if (msg.kind === "file-start") {
+        handleFileStart(msg);
+      } else if (msg.kind === "file-done") {
+        handleFileDone();
+      } else {
+        // Backward-compat: plain { text, from } chat message (no kind field)
+        const { text, from } = msg;
+        if (typeof text === "string" && text.trim()) {
+          appendChatMsg(text.trim(), from || "Peer", false);
+        }
       }
     } catch { /* ignore malformed */ }
   };
@@ -619,8 +648,248 @@ function cleanupChat() {
   closeChat();
   if (chatChannel) { try { chatChannel.close(); } catch { /* ignore */ } chatChannel = null; }
   chatUnread = 0;
+  incomingTransfer = null;
   if (chatMessages) chatMessages.innerHTML = "";
   if (chatBadge) { chatBadge.hidden = true; chatBadge.textContent = ""; }
+  transferObjectUrls.forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
+  transferObjectUrls = [];
+}
+
+// ---------------------------------------------------------------------------
+// File transfer helpers
+// ---------------------------------------------------------------------------
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Creates a generic file SVG element (document icon). */
+function makeFileIconSvg() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "file-icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z");
+  const poly = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  poly.setAttribute("points", "14 2 14 8 20 8");
+  svg.append(path, poly);
+  return svg;
+}
+
+/** Builds a file info row (icon + name + size). Returns the element. */
+function makeFileInfoRow(name, size) {
+  const row = document.createElement("div");
+  row.className = "file-info-row";
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "file-name";
+  nameSpan.textContent = name;
+  const sizeSpan = document.createElement("span");
+  sizeSpan.className = "file-size-text";
+  sizeSpan.textContent = formatFileSize(size);
+  row.append(makeFileIconSvg(), nameSpan, sizeSpan);
+  return row;
+}
+
+/**
+ * Appends a self-sent file bubble to the chat.
+ * For images the preview is shown immediately from the local object URL.
+ */
+function appendFileMsgSelf(name, size, type, blobUrl) {
+  if (!chatMessages) return;
+  const wrap = document.createElement("div");
+  wrap.className = "chat-msg chat-msg-self";
+  const nameEl = document.createElement("span");
+  nameEl.className = "chat-msg-name";
+  nameEl.textContent = T.youLabel;
+  const bubble = document.createElement("div");
+  bubble.className = "chat-msg-file chat-msg-text";
+
+  if (type.startsWith("image/")) {
+    bubble.classList.add("chat-msg-file--image");
+    const img = document.createElement("img");
+    img.className = "chat-img-preview";
+    img.src = blobUrl;
+    img.alt = name;
+    bubble.appendChild(img);
+  } else {
+    const dlBtn = document.createElement("a");
+    dlBtn.className = "file-dl-btn";
+    dlBtn.href = blobUrl;
+    dlBtn.download = name;
+    dlBtn.textContent = T.download;
+    bubble.append(makeFileInfoRow(name, size), dlBtn);
+  }
+
+  wrap.append(nameEl, bubble);
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+/**
+ * Appends an incoming file bubble with a progress bar.
+ * Returns { bubble, progressFill } so the caller can update/finalize later.
+ */
+function appendFileMsgIncoming(name, size, type, fromName) {
+  if (!chatMessages) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "chat-msg chat-msg-peer";
+  const nameEl = document.createElement("span");
+  nameEl.className = "chat-msg-name";
+  nameEl.textContent = fromName || peerDisplayName || "Peer";
+  const bubble = document.createElement("div");
+  bubble.className = "chat-msg-file chat-msg-text";
+
+  bubble.appendChild(makeFileInfoRow(name, size));
+
+  const progressWrap = document.createElement("div");
+  progressWrap.className = "file-progress";
+  const progressFill = document.createElement("div");
+  progressFill.className = "file-progress-fill";
+  progressFill.style.width = "0%";
+  progressWrap.appendChild(progressFill);
+  bubble.appendChild(progressWrap);
+
+  wrap.append(nameEl, bubble);
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  if (!chatOpen) {
+    chatUnread++;
+    if (chatBadge) {
+      chatBadge.textContent = chatUnread > 9 ? "9+" : String(chatUnread);
+      chatBadge.hidden = false;
+    }
+    showToast(`${nameEl.textContent}: 📎 ${name}`, 4000);
+  }
+
+  return { bubble, progressFill };
+}
+
+/** Updates the progress bar on an incoming transfer. pct = 0–100. */
+function updateFileMsgProgress(uiRef, pct) {
+  if (uiRef?.progressFill) uiRef.progressFill.style.width = `${pct}%`;
+}
+
+/** Replaces the progress bar with the final image or a download link. */
+function finalizeFileMsg(uiRef, blob, name, type) {
+  if (!uiRef?.bubble) return;
+  const url = URL.createObjectURL(blob);
+  transferObjectUrls.push(url);
+  const { bubble } = uiRef;
+  // Remove the progress wrap (last child)
+  bubble.lastElementChild?.remove();
+
+  if (type.startsWith("image/")) {
+    // Swap file-info-row for the actual image
+    bubble.innerHTML = "";
+    bubble.classList.add("chat-msg-file--image");
+    const img = document.createElement("img");
+    img.className = "chat-img-preview";
+    img.src = url;
+    img.alt = name;
+    bubble.appendChild(img);
+  } else {
+    const dlBtn = document.createElement("a");
+    dlBtn.className = "file-dl-btn";
+    dlBtn.href = url;
+    dlBtn.download = name;
+    dlBtn.textContent = T.download;
+    bubble.appendChild(dlBtn);
+  }
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Incoming file transfer message handlers (called from setupChatChannel)
+// ---------------------------------------------------------------------------
+
+function handleFileStart(msg) {
+  // Abort any unfinished previous transfer (shouldn't happen on ordered channel)
+  incomingTransfer = {
+    name: msg.name || "file",
+    size: msg.size || 0,
+    type: msg.type || "application/octet-stream",
+    totalChunks: Math.max(1, msg.totalChunks || 1),
+    chunks: [],
+    receivedChunks: 0,
+    uiRef: appendFileMsgIncoming(msg.name, msg.size, msg.type, peerDisplayName),
+  };
+}
+
+function handleFileChunk(data) {
+  if (!incomingTransfer) return;
+  incomingTransfer.chunks.push(data);
+  incomingTransfer.receivedChunks++;
+  const pct = Math.round((incomingTransfer.receivedChunks / incomingTransfer.totalChunks) * 100);
+  updateFileMsgProgress(incomingTransfer.uiRef, pct);
+}
+
+function handleFileDone() {
+  if (!incomingTransfer) return;
+  const { name, type, chunks, uiRef } = incomingTransfer;
+  incomingTransfer = null;
+  const blob = new Blob(chunks, { type });
+  finalizeFileMsg(uiRef, blob, name, type);
+}
+
+// ---------------------------------------------------------------------------
+// Outgoing file transfer
+// ---------------------------------------------------------------------------
+
+/**
+ * Sends a File over the chat DataChannel in 16 KB chunks.
+ * Implements backpressure: pauses when bufferedAmount > FILE_BUFFER_HIGH.
+ */
+async function sendFile(file) {
+  if (!chatChannel || chatChannel.readyState !== "open") {
+    showToast(T.chatNotReady, 2500);
+    return;
+  }
+  if (file.size > FILE_MAX_SIZE) {
+    showToast(T.fileTooLarge, 3500);
+    return;
+  }
+
+  const totalChunks = Math.max(1, Math.ceil(file.size / FILE_CHUNK_SIZE));
+  const blobUrl = URL.createObjectURL(file);
+  transferObjectUrls.push(blobUrl);
+
+  // Show immediately in own chat
+  appendFileMsgSelf(file.name, file.size, file.type, blobUrl);
+
+  // Signal the receiver
+  chatChannel.send(JSON.stringify({
+    kind: "file-start",
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    totalChunks,
+  }));
+
+  const buffer = await file.arrayBuffer();
+  for (let i = 0; i < totalChunks; i++) {
+    if (!chatChannel || chatChannel.readyState !== "open") break;
+
+    // Backpressure: yield until the send buffer drains
+    if (chatChannel.bufferedAmount > FILE_BUFFER_HIGH) {
+      await new Promise((resolve) => {
+        chatChannel.bufferedAmountLowThreshold = FILE_BUFFER_HIGH / 2;
+        const prevHandler = chatChannel.onbufferedamountlow;
+        chatChannel.onbufferedamountlow = () => {
+          chatChannel.onbufferedamountlow = prevHandler;
+          resolve();
+        };
+      });
+    }
+
+    chatChannel.send(buffer.slice(i * FILE_CHUNK_SIZE, (i + 1) * FILE_CHUNK_SIZE));
+  }
+
+  if (chatChannel && chatChannel.readyState === "open") {
+    chatChannel.send(JSON.stringify({ kind: "file-done" }));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1384,6 +1653,14 @@ if (chatForm) {
   chatForm.addEventListener("submit", (e) => {
     e.preventDefault();
     sendChatMessage();
+  });
+}
+if (btnAttach) btnAttach.addEventListener("click", () => fileInput?.click());
+if (fileInput) {
+  fileInput.addEventListener("change", () => {
+    const files = Array.from(fileInput.files || []);
+    fileInput.value = ""; // reset so the same file can be picked again
+    files.forEach(sendFile);
   });
 }
 
