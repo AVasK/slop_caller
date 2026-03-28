@@ -442,6 +442,90 @@ body {
   color: var(--text);
 }
 
+/* ─── Network quality indicator ──────────────────────────────────── */
+
+#net-quality {
+  position: absolute;
+  /* sits just below the mic meter (~42px of mic-meter content + 8px gap) */
+  top: max(66px, calc(env(safe-area-inset-top) + 56px));
+  left: max(16px, env(safe-area-inset-left));
+  z-index: 22;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s;
+}
+
+#app.session-live #net-quality {
+  opacity: 1;
+  visibility: visible;
+}
+
+.net-quality-btn {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 3px 4px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.net-quality-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.net-quality-icon {
+  width: 20px;
+  height: 16px;
+  display: block;
+}
+
+/* Default: all bars dim */
+#net-quality .bar {
+  fill: rgba(255, 255, 255, 0.18);
+  transition: fill 0.4s ease;
+}
+
+/* Good — all 3 bars green */
+#net-quality[data-quality="good"] .bar-1,
+#net-quality[data-quality="good"] .bar-2,
+#net-quality[data-quality="good"] .bar-3 { fill: #4ade80; }
+
+/* Fair — 2 bars amber, tallest dim */
+#net-quality[data-quality="fair"] .bar-1,
+#net-quality[data-quality="fair"] .bar-2 { fill: #fbbf24; }
+
+/* Poor — 1 bar red, others dim */
+#net-quality[data-quality="poor"] .bar-1 { fill: #f87171; }
+
+/* Stats panel — slides in to the right of the icon */
+.net-stats {
+  display: flex;
+  gap: 10px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  background: rgba(8, 10, 13, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.net-stats[hidden] { display: none; }
+
+/* Colour the individual stat values to match quality */
+#net-quality[data-quality="good"]  .net-stats { color: #86efac; }
+#net-quality[data-quality="fair"]  .net-stats { color: #fde68a; }
+#net-quality[data-quality="poor"]  .net-stats { color: #fca5a5; }
+
+/* ─── Mic level ───────────────────────────────────────────────────── */
 /* Mic level — top left, same visibility as call controls */
 #mic-meter {
   position: absolute;

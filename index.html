@@ -38,6 +38,22 @@
             </div>
           </div>
 
+          <!-- Network quality indicator — top-left, below mic meter -->
+          <div id="net-quality" aria-hidden="true">
+            <button id="btn-net-quality" class="net-quality-btn" aria-label="Network quality" title="Network quality">
+              <svg class="net-quality-icon" viewBox="0 0 18 14" fill="none" aria-hidden="true">
+                <rect class="bar bar-1" x="0"  y="8" width="4" height="6" rx="1"/>
+                <rect class="bar bar-2" x="7"  y="4" width="4" height="10" rx="1"/>
+                <rect class="bar bar-3" x="14" y="0" width="4" height="14" rx="1"/>
+              </svg>
+            </button>
+            <div id="net-stats" class="net-stats" hidden>
+              <span id="net-rtt"></span>
+              <span id="net-jitter"></span>
+              <span id="net-loss"></span>
+            </div>
+          </div>
+
           <!-- Full-screen overlay: lobby before a session, status message during setup -->
           <div id="feed-placeholder">
             <!-- Lobby: shown when no session is active -->

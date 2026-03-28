@@ -187,6 +187,14 @@ const audioOnlyCall = document.getElementById("audio-only-call");
 const audioOnlyRemoteName = document.getElementById("audio-only-remote-name");
 const displayNameInput = document.getElementById("display-name-input");
 
+// Network quality
+const netQualityEl  = document.getElementById("net-quality");
+const netStatsEl    = document.getElementById("net-stats");
+const netRttEl      = document.getElementById("net-rtt");
+const netJitterEl   = document.getElementById("net-jitter");
+const netLossEl     = document.getElementById("net-loss");
+const btnNetQuality = document.getElementById("btn-net-quality");
+
 // Chat
 const chatPanel = document.getElementById("chat-panel");
 const chatMessages = document.getElementById("chat-messages");
@@ -237,6 +245,11 @@ let sigUnreachableToastShown = false;
 let peerDisplayName = "Peer";
 /** True once RTCPeerConnection reaches "connected" — drives layout without requiring live tracks. */
 let peerConnected = false;
+
+// Network quality
+/** @type {number | null} */
+let netQualityTimer = null;
+let netPrevRtp = { packetsLost: 0, packetsReceived: 0 };
 
 // Chat
 /** @type {RTCDataChannel | null} */
@@ -458,6 +471,73 @@ function applyTranslations() {
   if (youLabelEl)          youLabelEl.textContent          = T.youLabel;
   const chatTitleEl = document.querySelector(".chat-title");
   if (chatTitleEl)         chatTitleEl.textContent         = T.chatTitle;
+}
+
+// ---------------------------------------------------------------------------
+// Network quality — getStats() polling
+// ---------------------------------------------------------------------------
+
+async function updateNetQuality() {
+  if (!pc) return;
+  try {
+    const reports = await pc.getStats();
+    let rttSec = null, jitterSec = null, packetsLost = 0, packetsReceived = 0;
+
+    reports.forEach((r) => {
+      // Audio inbound gives jitter + packet counts (more stable than video)
+      if (r.type === "inbound-rtp" && r.kind === "audio") {
+        jitterSec     = r.jitter          ?? null;
+        packetsLost   = r.packetsLost     ?? 0;
+        packetsReceived = r.packetsReceived ?? 0;
+      }
+      // Nominated candidate-pair gives the most accurate RTT
+      if (r.type === "candidate-pair" && r.nominated && r.currentRoundTripTime != null) {
+        rttSec = r.currentRoundTripTime;
+      }
+      // Fallback: remote-inbound-rtp also carries RTT
+      if (r.type === "remote-inbound-rtp" && r.kind === "audio" && rttSec === null) {
+        rttSec = r.roundTripTime ?? null;
+      }
+    });
+
+    // Delta packet-loss rate since last poll (avoids cumulative skew)
+    const deltaLost  = Math.max(0, packetsLost     - netPrevRtp.packetsLost);
+    const deltaTotal = Math.max(1, (packetsLost + packetsReceived)
+                                 - (netPrevRtp.packetsLost + netPrevRtp.packetsReceived));
+    const lossPct    = (deltaLost / deltaTotal) * 100;
+    netPrevRtp = { packetsLost, packetsReceived };
+
+    const rttMs    = rttSec    != null ? rttSec    * 1000 : null;
+    const jitterMs = jitterSec != null ? jitterSec * 1000 : null;
+
+    // Classify quality
+    let quality = "good";
+    if ((rttMs    != null && rttMs    > 300) || (jitterMs != null && jitterMs > 60) || lossPct > 5)  quality = "poor";
+    else if ((rttMs != null && rttMs  > 150) || (jitterMs != null && jitterMs > 30) || lossPct > 1)  quality = "fair";
+
+    if (netQualityEl) netQualityEl.dataset.quality = quality;
+
+    // Update stat labels
+    if (netRttEl)    netRttEl.textContent    = rttMs    != null ? `RTT ${Math.round(rttMs)}ms`    : "RTT —";
+    if (netJitterEl) netJitterEl.textContent = jitterMs != null ? `Jitter ${Math.round(jitterMs)}ms` : "Jitter —";
+    if (netLossEl)   netLossEl.textContent   = `Loss ${lossPct < 0.05 ? "<0.1" : lossPct.toFixed(1)}%`;
+  } catch { /* non-fatal */ }
+}
+
+function startNetQualityPolling() {
+  stopNetQualityPolling();
+  netPrevRtp = { packetsLost: 0, packetsReceived: 0 };
+  if (netQualityEl) delete netQualityEl.dataset.quality;
+  // First sample after a short delay, then every 3 s
+  setTimeout(updateNetQuality, 1500);
+  netQualityTimer = setInterval(updateNetQuality, 3000);
+}
+
+function stopNetQualityPolling() {
+  if (netQualityTimer) { clearInterval(netQualityTimer); netQualityTimer = null; }
+  netPrevRtp = { packetsLost: 0, packetsReceived: 0 };
+  if (netQualityEl) { delete netQualityEl.dataset.quality; }
+  if (netStatsEl)   { netStatsEl.hidden = true; }
 }
 
 // ---------------------------------------------------------------------------
@@ -697,6 +777,7 @@ function makePeerConnection() {
         peerConnected = true;
         applyUiState({ kind: UiState.LIVE });
         updateCallLayout();
+        startNetQualityPolling();
       }
       if (s === "failed" || s === "disconnected") showToast(T.connectionState(s), 3500);
     },
@@ -704,6 +785,7 @@ function makePeerConnection() {
 }
 
 function resetPeerConnection() {
+  stopNetQualityPolling();
   iceBuffer = [];
   videoTransceiver = null;
   peerConnected = false;
@@ -1062,6 +1144,9 @@ async function addCameraTrack() {
   ensureSwapchainForSize(vw, vh);
   rafId = requestAnimationFrame(renderLoop);
 
+  // Match the PiP box to the camera's real aspect ratio (e.g. 16:9, 4:3, 1:1)
+  if (localPip) localPip.style.aspectRatio = `${vw} / ${vh}`;
+
   if (pc) {
     if (videoTransceiver?.sender.track !== null) {
       // Re-enabling after camera was turned off: stream association already in SDP, replaceTrack is safe.
@@ -1094,6 +1179,7 @@ async function removeCameraTrack() {
   if (video) { video.srcObject = null; video.remove(); video = null; }
   swapchain = null;
   window.__vcallSwapchain = null;
+  if (localPip) localPip.style.aspectRatio = ""; // revert to CSS default (4/3)
 
   if (stream) {
     stream.getVideoTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
@@ -1286,6 +1372,10 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && audioCtx && audioCtx.state === "suspended") {
     audioCtx.resume().catch(() => {});
   }
+});
+
+if (btnNetQuality) btnNetQuality.addEventListener("click", () => {
+  if (netStatsEl) netStatsEl.hidden = !netStatsEl.hidden;
 });
 
 if (btnChat) btnChat.addEventListener("click", toggleChat);
