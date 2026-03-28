@@ -11,6 +11,11 @@ Serve this folder over HTTPS (for iPhone / camera testing).
      python3 serve_https.py localhost+2.pem localhost+2-key.pem
 5. On iPhone: open https://192.168.1.42:8765 (your IP). If Safari warns, install the
    mkcert root CA on iOS (see https://github.com/FiloSottile/mkcert#mobile-devices )
+
+6. WebRTC signaling must use WSS on the same host (Safari blocks ws:// from https://).
+   In another terminal, using the SAME two .pem files as step 3:
+     python3 signaling_server.py localhost+2.pem localhost+2-key.pem
+   (Plain python3 signaling_server.py is only for http:// pages.)
 """
 
 from __future__ import annotations

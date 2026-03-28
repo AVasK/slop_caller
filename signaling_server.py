@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
 Minimal WebRTC signaling relay: two WebSocket clients per room exchange JSON messages
-(offer / answer / ice). Run: pip install websockets && python3 signaling_server.py
+(offer / answer / ice). The browser uses a random session id as the room name (query
+param ?session=...) so two peers opening the same link join the same room.
+
+Run (plain WebSocket, use with http:// pages):
+  pip install websockets && python3 signaling_server.py
+
+If the page is served over HTTPS (e.g. serve_https.py on iPhone), Safari requires
+wss:// — use the same certificate files as your HTTPS server:
+  python3 signaling_server.py localhost+2.pem localhost+2-key.pem
 """
 
 from __future__ import annotations
@@ -9,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import ssl
 import sys
 from typing import Any
 
@@ -64,7 +74,7 @@ async def handler(ws: Any) -> None:
                     await w_answer.send(json.dumps({"type": "peer", "role": "answer"}))
                     logger.info("room %s paired", room)
                 continue
-            if msg_type in ("offer", "answer", "ice"):
+            if msg_type in ("offer", "answer", "ice", "peer-info"):
                 r = ws_room.get(ws)
                 if r:
                     await forward_others(r, ws, raw)
@@ -85,9 +95,36 @@ async def handler(ws: Any) -> None:
             logger.info("disconnect room=%s remaining=%s", r, len(rooms.get(r, [])))
 
 
+def load_ssl_context() -> ssl.SSLContext | None:
+    if len(sys.argv) < 3:
+        return None
+    cert, key = sys.argv[1], sys.argv[2]
+    if not os.path.isfile(cert) or not os.path.isfile(key):
+        print("Cert or key not found; starting without TLS.", file=sys.stderr)
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=cert, keyfile=key)
+    return ctx
+
+
 async def main() -> None:
-    async with websockets.serve(handler, HOST, PORT):
-        logger.info("Signaling WebSocket ws://%s:%s (use your LAN IP from other devices)", HOST, PORT)
+    ssl_ctx = load_ssl_context()
+    kwargs: dict[str, Any] = {}
+    if ssl_ctx is not None:
+        kwargs["ssl"] = ssl_ctx
+    async with websockets.serve(handler, HOST, PORT, **kwargs):
+        if ssl_ctx is not None:
+            logger.info(
+                "Signaling WebSocket wss://%s:%s (TLS — use with https:// pages on iPhone)",
+                HOST,
+                PORT,
+            )
+        else:
+            logger.info(
+                "Signaling WebSocket ws://%s:%s (plain WS — use with http:// or set ?signal=)",
+                HOST,
+                PORT,
+            )
         await asyncio.Future()
 
 

@@ -9,97 +9,96 @@
   <body>
     <div id="app">
       <div id="video-stage">
-        <div id="rtc-bar">
-          <div id="mode-bar" class="mode-bar">
-            <span class="rtc-label">Mode</span>
-            <label class="mode-option"
-              ><input type="radio" name="sdp-mode" value="ws" checked /> WebSocket</label
-            >
-            <label class="mode-option"
-              ><input type="radio" name="sdp-mode" value="manual" /> Manual SDP</label
-            >
-          </div>
-          <div id="rtc-bar-ws">
-            <label class="rtc-label" for="room-input">Room</label>
-            <input
-              id="room-input"
-              type="text"
-              autocomplete="off"
-              placeholder="same on both devices"
-              value="demo"
-              maxlength="64"
-            />
-            <button type="button" id="btn-join" class="btn-join" disabled>Join peer</button>
-          </div>
-          <div id="manual-sdp-panel" class="manual-sdp-panel" hidden>
-            <p class="manual-help">
-              No signaling server: ICE is included in each SDP after gathering. Caller creates an
-              offer and sends the text (chat, AirDrop, etc.); answerer pastes it and sends the answer
-              back; caller pastes the answer and applies it.
-            </p>
-            <div class="manual-row">
-              <button type="button" id="btn-manual-offer" class="btn-manual" disabled>
-                1. Create offer
-              </button>
-              <button type="button" id="btn-manual-copy-out" class="btn-manual secondary" disabled>
-                Copy SDP below
-              </button>
+        <div id="call-stack">
+          <div id="call-layout">
+            <div id="remote-fullscreen">
+              <video id="remote-video" playsinline autoplay></video>
+              <div id="remote-name-overlay">
+                <span id="remote-name-text">Peer</span>
+              </div>
             </div>
-            <label class="sdp-label" for="manual-sdp-out">SDP to copy (offer, then answer)</label>
-            <textarea id="manual-sdp-out" class="sdp-textarea" rows="8" readonly></textarea>
-            <label class="sdp-label" for="manual-sdp-offer-in">Paste caller’s offer (answerer)</label>
-            <textarea
-              id="manual-sdp-offer-in"
-              class="sdp-textarea"
-              rows="5"
-              placeholder="v=0&#10;o=…"
-            ></textarea>
-            <button type="button" id="btn-manual-answer" class="btn-manual" disabled>
-              2. Create answer from offer
-            </button>
-            <label class="sdp-label" for="manual-sdp-answer-in">Paste answer (caller)</label>
-            <textarea
-              id="manual-sdp-answer-in"
-              class="sdp-textarea"
-              rows="5"
-              placeholder="v=0&#10;o=…"
-            ></textarea>
-            <button type="button" id="btn-manual-apply-answer" class="btn-manual" disabled>
-              3. Apply answer
-            </button>
+            <div id="local-pip" hidden>
+              <canvas id="feed-canvas" width="640" height="480" aria-label="Your camera"></canvas>
+            </div>
+            <div id="audio-only-call" hidden>
+              <div class="audio-only-remote" id="audio-only-remote-name">Peer</div>
+              <div class="audio-only-you">You</div>
+            </div>
           </div>
-          <span id="rtc-status" class="rtc-status"></span>
-        </div>
 
-        <div id="mic-meter" aria-hidden="true">
-          <span id="mic-meter-label">Mic</span>
-          <div id="mic-meter-track">
-            <div id="mic-meter-fill"></div>
+          <!-- Top bar: status only, visible during an active call -->
+          <div id="rtc-bar">
+            <span id="rtc-status" class="rtc-status"></span>
           </div>
-        </div>
 
-        <div id="video-split">
-          <div class="video-panel">
-            <span class="video-label">You</span>
-            <canvas id="feed-canvas" width="640" height="480" aria-label="Camera preview"></canvas>
+          <div id="mic-meter" aria-hidden="true">
+            <span id="mic-meter-label">Mic</span>
+            <div id="mic-meter-track">
+              <div id="mic-meter-fill"></div>
+            </div>
           </div>
-          <div class="video-panel">
-            <span class="video-label">Peer</span>
-            <video id="remote-video" playsinline autoplay></video>
-            <div id="remote-placeholder">No remote yet</div>
+
+          <!-- Full-screen overlay: lobby before a session, status message during setup -->
+          <div id="feed-placeholder">
+            <!-- Lobby: shown when no session is active -->
+            <div id="lobby">
+              <p class="lobby-title">VCall</p>
+              <div class="lobby-name-row">
+                <input
+                  type="text"
+                  id="display-name-input"
+                  class="display-name-input"
+                  maxlength="32"
+                  placeholder="Your name"
+                  autocomplete="name"
+                />
+              </div>
+              <div class="lobby-actions">
+                <button type="button" id="btn-start-session" class="btn-lobby-primary">
+                  Start a session
+                </button>
+                <button type="button" id="btn-show-join" class="btn-lobby-secondary">
+                  Join a session
+                </button>
+              </div>
+              <div id="join-code-form" class="join-code-form" hidden>
+                <input
+                  type="text"
+                  id="join-code-input"
+                  class="join-code-input"
+                  maxlength="6"
+                  placeholder="Session code"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  autocomplete="off"
+                />
+                <button type="button" id="btn-join-session" class="btn-lobby-primary join-go">Join</button>
+              </div>
+            </div>
+
+            <!-- Session-waiting: shown after "Start a session" — code visible immediately -->
+            <div id="session-waiting" hidden>
+              <p class="lobby-title">Session ready</p>
+              <p class="session-share-hint">Share the code or link with who you want to call</p>
+              <div class="session-code-block">
+                <span id="session-code-display" class="session-code-big"></span>
+              </div>
+              <button type="button" id="btn-copy-session-link" class="btn-lobby-secondary copy-link-btn">
+                Copy link
+              </button>
+              <p id="session-status-msg" class="session-status-msg"></p>
+              <button type="button" id="btn-cancel-session" class="btn-lobby-text">Cancel</button>
+            </div>
+
+            <!-- Plain status line: shown when joining someone else's session -->
+            <p id="placeholder-msg" hidden></p>
           </div>
-        </div>
-        <div id="feed-placeholder">
-          <p id="placeholder-msg">Starting camera…</p>
-          <button type="button" id="btn-start-camera" class="btn-start-camera" hidden>
-            Start camera
-          </button>
         </div>
       </div>
 
       <div id="status-toast" role="status" aria-live="polite"></div>
 
-      <div id="controls">
+      <div id="controls" aria-hidden="true">
         <button
           type="button"
           id="btn-mic"
@@ -107,12 +106,26 @@
           aria-label="Toggle microphone"
           aria-pressed="false"
           title="Mute / unmute"
+          disabled
         >
           <svg viewBox="0 0 24 24">
             <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z" />
             <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
             <line x1="12" y1="19" x2="12" y2="23" />
             <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          id="btn-camera"
+          class="btn-round"
+          aria-label="Toggle camera"
+          aria-pressed="false"
+          title="Camera on / off"
+        >
+          <svg viewBox="0 0 24 24">
+            <path d="M15 10l4.553-2.276A1 1 0 0 1 21 8.723v6.554a1 1 0 0 1-1.447.894L15 14v-4z" />
+            <rect x="2" y="7" width="13" height="10" rx="2" />
           </svg>
         </button>
         <button type="button" id="btn-hangup" class="btn-round" aria-label="End call" title="End call">
@@ -124,6 +137,6 @@
         </button>
       </div>
     </div>
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>
