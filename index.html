@@ -9,6 +9,20 @@
   <body>
     <div id="app">
       <div id="video-stage">
+        <div id="rtc-bar">
+          <label class="rtc-label" for="room-input">Room</label>
+          <input
+            id="room-input"
+            type="text"
+            autocomplete="off"
+            placeholder="same on both devices"
+            value="demo"
+            maxlength="64"
+          />
+          <button type="button" id="btn-join" class="btn-join" disabled>Join peer</button>
+          <span id="rtc-status" class="rtc-status"></span>
+        </div>
+
         <div id="mic-meter" aria-hidden="true">
           <span id="mic-meter-label">Mic</span>
           <div id="mic-meter-track">
@@ -16,7 +30,17 @@
           </div>
         </div>
 
-        <canvas id="feed-canvas" width="640" height="480" aria-label="Camera preview"></canvas>
+        <div id="video-split">
+          <div class="video-panel">
+            <span class="video-label">You</span>
+            <canvas id="feed-canvas" width="640" height="480" aria-label="Camera preview"></canvas>
+          </div>
+          <div class="video-panel">
+            <span class="video-label">Peer</span>
+            <video id="remote-video" playsinline autoplay></video>
+            <div id="remote-placeholder">No remote yet</div>
+          </div>
+        </div>
         <div id="feed-placeholder">
           <p id="placeholder-msg">Starting camera…</p>
           <button type="button" id="btn-start-camera" class="btn-start-camera" hidden>
@@ -52,6 +76,6 @@
         </button>
       </div>
     </div>
-    <script src="app.js" defer></script>
+    <script src="app.js"></script>
   </body>
 </html>
