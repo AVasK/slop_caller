@@ -1,5 +1,5 @@
 /**
- * Local camera + mic, triple-buffer swapchain, WebRTC to a peer via WebSocket signaling.
+ * Local camera + mic, triple-buffer swapchain, WebRTC: WebSocket signaling or manual SDP paste.
  */
 
 class FrameSwapchain {
@@ -70,6 +70,8 @@ let pc = null;
 let sigWs = null;
 /** @type {RTCIceCandidateInit[]} */
 let iceBuffer = [];
+/** Caller has created an offer and is waiting for the answer SDP (manual mode). */
+let manualOfferPending = false;
 
 /** @type {AudioContext | null} */
 let audioCtx = null;
@@ -153,6 +155,7 @@ function enterReceiveOnlyMode(placeholderText, toastText) {
   if (btnMic) btnMic.disabled = true;
   setRemotePlaceholderVisible(true);
   if (toastText) showToast(toastText, 5000);
+  syncManualButtons();
 }
 
 function showToast(msg, ms = 2200) {
@@ -162,7 +165,11 @@ function showToast(msg, ms = 2200) {
   showToast._t = setTimeout(() => statusToast.classList.remove("visible"), ms);
 }
 
-function makePeerConnection() {
+/**
+ * @param {{ iceViaWebSocket?: boolean }} [options] If false (manual SDP), ICE is embedded in SDP after gathering completes.
+ */
+function makePeerConnection(options = {}) {
+  const iceViaWebSocket = options.iceViaWebSocket !== false;
   const conn = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   conn.ontrack = (ev) => {
     const [ms] = ev.streams;
@@ -172,7 +179,7 @@ function makePeerConnection() {
     }
   };
   conn.onicecandidate = (ev) => {
-    if (ev.candidate && sigWs && sigWs.readyState === WebSocket.OPEN) {
+    if (iceViaWebSocket && ev.candidate && sigWs && sigWs.readyState === WebSocket.OPEN) {
       sigWs.send(JSON.stringify({ type: "ice", candidate: ev.candidate.toJSON() }));
     }
   };
@@ -184,6 +191,136 @@ function makePeerConnection() {
     }
   };
   return conn;
+}
+
+function waitForIceGatheringComplete(conn) {
+  if (conn.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      if (conn.iceGatheringState === "complete") {
+        conn.removeEventListener("icegatheringstatechange", done);
+        resolve();
+      }
+    };
+    conn.addEventListener("icegatheringstatechange", done);
+    setTimeout(() => {
+      conn.removeEventListener("icegatheringstatechange", done);
+      resolve();
+    }, 10000);
+  });
+}
+
+function isManualMode() {
+  const r = document.querySelector('input[name="sdp-mode"]:checked');
+  return r && r.value === "manual";
+}
+
+function applyModeUI() {
+  const manual = isManualMode();
+  const wsBar = document.getElementById("rtc-bar-ws");
+  const manualPanel = document.getElementById("manual-sdp-panel");
+  if (wsBar) wsBar.hidden = manual;
+  if (manualPanel) manualPanel.hidden = !manual;
+  teardownPeerConnection();
+  clearManualSdpFields();
+  syncManualButtons();
+}
+
+function clearManualSdpFields() {
+  manualOfferPending = false;
+  ["manual-sdp-out", "manual-sdp-offer-in", "manual-sdp-answer-in"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+}
+
+function syncManualButtons() {
+  const base = btnJoin && !btnJoin.disabled;
+  const outEl = document.getElementById("manual-sdp-out");
+  const ansIn = document.getElementById("manual-sdp-answer-in");
+  const hasOut = outEl && outEl.value.trim().length > 0;
+  const hasAnsIn = ansIn && ansIn.value.trim().length > 0;
+  const offerBtn = document.getElementById("btn-manual-offer");
+  const ansBtn = document.getElementById("btn-manual-answer");
+  const copyBtn = document.getElementById("btn-manual-copy-out");
+  const applyBtn = document.getElementById("btn-manual-apply-answer");
+  if (offerBtn) offerBtn.disabled = !base;
+  if (ansBtn) ansBtn.disabled = !base;
+  if (copyBtn) copyBtn.disabled = !hasOut;
+  if (applyBtn) applyBtn.disabled = !(base && manualOfferPending && hasAnsIn);
+}
+
+async function manualCreateOffer() {
+  if (!isManualMode()) return;
+  teardownPeerConnection();
+  manualOfferPending = false;
+  pc = makePeerConnection({ iceViaWebSocket: false });
+  addMediaToPeerConnection();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await waitForIceGatheringComplete(pc);
+  const out = document.getElementById("manual-sdp-out");
+  if (out) out.value = pc.localDescription.sdp;
+  manualOfferPending = true;
+  setRtcStatus("Copy the offer SDP to the answerer");
+  showToast("Offer ready — copy and send to peer", 3000);
+  syncManualButtons();
+}
+
+async function manualCreateAnswer() {
+  const offerIn = document.getElementById("manual-sdp-offer-in");
+  const offerSdp = offerIn && offerIn.value.trim();
+  if (!offerSdp || !offerSdp.startsWith("v=0")) {
+    showToast("Paste the caller’s offer SDP (must start with v=0)", 3500);
+    return;
+  }
+  teardownPeerConnection();
+  manualOfferPending = false;
+  pc = makePeerConnection({ iceViaWebSocket: false });
+  addMediaToPeerConnection();
+  await pc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: offerSdp }));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  await waitForIceGatheringComplete(pc);
+  const out = document.getElementById("manual-sdp-out");
+  if (out) out.value = pc.localDescription.sdp;
+  setRtcStatus(`WebRTC: ${pc.connectionState}`);
+  showToast("Answer ready — copy back to the caller", 3500);
+  syncManualButtons();
+}
+
+async function manualApplyAnswer() {
+  const ta = document.getElementById("manual-sdp-answer-in");
+  const answerSdp = ta && ta.value.trim();
+  if (!answerSdp || !answerSdp.startsWith("v=0")) {
+    showToast("Paste the answer SDP (must start with v=0)", 3500);
+    return;
+  }
+  if (!pc) {
+    showToast("Create an offer first (step 1)", 3000);
+    return;
+  }
+  try {
+    await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
+  } catch (e) {
+    showToast("Invalid answer: " + (e && e.message ? e.message : String(e)), 5000);
+    return;
+  }
+  manualOfferPending = false;
+  setRtcStatus(`WebRTC: ${pc.connectionState}`);
+  showToast("Answer applied", 2500);
+  syncManualButtons();
+}
+
+async function copyManualSdpOut() {
+  const ta = document.getElementById("manual-sdp-out");
+  if (!ta || !ta.value.trim()) return;
+  try {
+    await navigator.clipboard.writeText(ta.value);
+    showToast("SDP copied to clipboard", 2000);
+  } catch {
+    showToast("Select the SDP and copy manually (⌘C / Ctrl+C)", 3500);
+  }
 }
 
 /** Add outgoing tracks, or recv-only transceivers if there is no local camera/mic. */
@@ -257,6 +394,7 @@ async function handleIncomingIce(candidate) {
 }
 
 function teardownPeerConnection() {
+  manualOfferPending = false;
   iceBuffer = [];
   if (pc) {
     pc.ontrack = null;
@@ -283,6 +421,10 @@ function teardownPeerConnection() {
 }
 
 function connectSignaling() {
+  if (isManualMode()) {
+    showToast("Manual SDP mode: use the steps below, or switch to WebSocket", 4000);
+    return;
+  }
   teardownPeerConnection();
   const url = signalUrl();
   setRtcStatus(`Signaling: connecting… (${url})`);
@@ -537,10 +679,15 @@ async function startCall() {
   }
 
   placeholder.hidden = true;
-  showToast("Camera ready — tap Join peer with the same room on the other device");
+  showToast(
+    isManualMode()
+      ? "Camera ready — use Manual SDP steps (or switch to WebSocket + Join peer)"
+      : "Camera ready — tap Join peer with the same room on the other device"
+  );
   if (btnJoin) btnJoin.disabled = false;
   if (btnMic) btnMic.disabled = false;
   setRemotePlaceholderVisible(true);
+  syncManualButtons();
 
   rafId = requestAnimationFrame(renderLoop);
 }
@@ -570,6 +717,8 @@ btnHangup.addEventListener("click", () => {
     btnMic.classList.remove("muted");
     btnMic.setAttribute("aria-pressed", "false");
   }
+  clearManualSdpFields();
+  syncManualButtons();
   showToast("Call ended");
 });
 
@@ -585,6 +734,26 @@ if (btnJoin) {
   });
 }
 
+document.querySelectorAll('input[name="sdp-mode"]').forEach((r) => {
+  r.addEventListener("change", () => {
+    applyModeUI();
+  });
+});
+
+const btnManualOffer = document.getElementById("btn-manual-offer");
+const btnManualAnswer = document.getElementById("btn-manual-answer");
+const btnManualCopyOut = document.getElementById("btn-manual-copy-out");
+const btnManualApplyAnswer = document.getElementById("btn-manual-apply-answer");
+const manualAnswerIn = document.getElementById("manual-sdp-answer-in");
+
+if (btnManualOffer) btnManualOffer.addEventListener("click", () => manualCreateOffer());
+if (btnManualAnswer) btnManualAnswer.addEventListener("click", () => manualCreateAnswer());
+if (btnManualCopyOut) btnManualCopyOut.addEventListener("click", () => copyManualSdpOut());
+if (btnManualApplyAnswer) btnManualApplyAnswer.addEventListener("click", () => manualApplyAnswer());
+if (manualAnswerIn) {
+  manualAnswerIn.addEventListener("input", () => syncManualButtons());
+}
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && audioCtx && audioCtx.state === "suspended") {
     audioCtx.resume().catch(() => {});
@@ -596,6 +765,12 @@ function boot() {
   if (params.get("room") && roomInput) {
     roomInput.value = params.get("room");
   }
+  if (params.get("mode") === "manual") {
+    const mr = document.querySelector('input[name="sdp-mode"][value="manual"]');
+    if (mr) mr.checked = true;
+  }
+  applyModeUI();
+
   const mediaErr = getMediaAccessError();
   if (mediaErr) {
     if (location.protocol === "file:") {

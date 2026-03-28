@@ -10,16 +10,64 @@
     <div id="app">
       <div id="video-stage">
         <div id="rtc-bar">
-          <label class="rtc-label" for="room-input">Room</label>
-          <input
-            id="room-input"
-            type="text"
-            autocomplete="off"
-            placeholder="same on both devices"
-            value="demo"
-            maxlength="64"
-          />
-          <button type="button" id="btn-join" class="btn-join" disabled>Join peer</button>
+          <div id="mode-bar" class="mode-bar">
+            <span class="rtc-label">Mode</span>
+            <label class="mode-option"
+              ><input type="radio" name="sdp-mode" value="ws" checked /> WebSocket</label
+            >
+            <label class="mode-option"
+              ><input type="radio" name="sdp-mode" value="manual" /> Manual SDP</label
+            >
+          </div>
+          <div id="rtc-bar-ws">
+            <label class="rtc-label" for="room-input">Room</label>
+            <input
+              id="room-input"
+              type="text"
+              autocomplete="off"
+              placeholder="same on both devices"
+              value="demo"
+              maxlength="64"
+            />
+            <button type="button" id="btn-join" class="btn-join" disabled>Join peer</button>
+          </div>
+          <div id="manual-sdp-panel" class="manual-sdp-panel" hidden>
+            <p class="manual-help">
+              No signaling server: ICE is included in each SDP after gathering. Caller creates an
+              offer and sends the text (chat, AirDrop, etc.); answerer pastes it and sends the answer
+              back; caller pastes the answer and applies it.
+            </p>
+            <div class="manual-row">
+              <button type="button" id="btn-manual-offer" class="btn-manual" disabled>
+                1. Create offer
+              </button>
+              <button type="button" id="btn-manual-copy-out" class="btn-manual secondary" disabled>
+                Copy SDP below
+              </button>
+            </div>
+            <label class="sdp-label" for="manual-sdp-out">SDP to copy (offer, then answer)</label>
+            <textarea id="manual-sdp-out" class="sdp-textarea" rows="8" readonly></textarea>
+            <label class="sdp-label" for="manual-sdp-offer-in">Paste caller’s offer (answerer)</label>
+            <textarea
+              id="manual-sdp-offer-in"
+              class="sdp-textarea"
+              rows="5"
+              placeholder="v=0&#10;o=…"
+            ></textarea>
+            <button type="button" id="btn-manual-answer" class="btn-manual" disabled>
+              2. Create answer from offer
+            </button>
+            <label class="sdp-label" for="manual-sdp-answer-in">Paste answer (caller)</label>
+            <textarea
+              id="manual-sdp-answer-in"
+              class="sdp-textarea"
+              rows="5"
+              placeholder="v=0&#10;o=…"
+            ></textarea>
+            <button type="button" id="btn-manual-apply-answer" class="btn-manual" disabled>
+              3. Apply answer
+            </button>
+          </div>
           <span id="rtc-status" class="rtc-status"></span>
         </div>
 
