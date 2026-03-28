@@ -128,6 +128,12 @@
             <rect x="2" y="7" width="13" height="10" rx="2" />
           </svg>
         </button>
+        <button type="button" id="btn-chat" class="btn-round" aria-label="Toggle chat" title="Chat">
+          <svg viewBox="0 0 24 24">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          <span id="chat-badge" class="chat-badge" aria-hidden="true" hidden></span>
+        </button>
         <button type="button" id="btn-hangup" class="btn-round" aria-label="End call" title="End call">
           <svg viewBox="0 0 24 24">
             <path
@@ -135,6 +141,36 @@
             />
           </svg>
         </button>
+      </div>
+
+      <!-- Floating chat panel — visible only during an active call -->
+      <div id="chat-panel" class="chat-panel" hidden>
+        <div class="chat-header">
+          <span class="chat-title">Chat</span>
+          <button type="button" id="btn-chat-close" class="chat-close-btn" aria-label="Close chat">
+            <svg viewBox="0 0 24 24">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div id="chat-messages" class="chat-messages" aria-live="polite" aria-label="Chat messages"></div>
+        <form id="chat-form" class="chat-input-row">
+          <input
+            type="text"
+            id="chat-input"
+            class="chat-input-field"
+            placeholder="Message…"
+            autocomplete="off"
+            maxlength="500"
+          />
+          <button type="submit" class="btn-chat-send" aria-label="Send message">
+            <svg viewBox="0 0 24 24">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
+        </form>
       </div>
     </div>
     <script type="module" src="app.js"></script>

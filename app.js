@@ -78,6 +78,15 @@ const audioOnlyCall = document.getElementById("audio-only-call");
 const audioOnlyRemoteName = document.getElementById("audio-only-remote-name");
 const displayNameInput = document.getElementById("display-name-input");
 
+// Chat
+const chatPanel = document.getElementById("chat-panel");
+const chatMessages = document.getElementById("chat-messages");
+const chatInputField = document.getElementById("chat-input");
+const chatForm = document.getElementById("chat-form");
+const chatBadge = document.getElementById("chat-badge");
+const btnChat = document.getElementById("btn-chat");
+const btnChatClose = document.getElementById("btn-chat-close");
+
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const appEl = document.getElementById("app");
 const controlsEl = document.getElementById("controls");
@@ -120,6 +129,12 @@ let peerDisplayName = "Peer";
 /** True once RTCPeerConnection reaches "connected" — drives layout without requiring live tracks. */
 let peerConnected = false;
 
+// Chat
+/** @type {RTCDataChannel | null} */
+let chatChannel = null;
+let chatOpen = false;
+let chatUnread = 0;
+
 // ---------------------------------------------------------------------------
 // UI state — discriminated union
 //
@@ -146,6 +161,7 @@ function applyUiState(next) {
       if (lobby) lobby.hidden = false;
       if (sessionWaiting) sessionWaiting.hidden = true;
       if (placeholderMsg) placeholderMsg.hidden = true;
+      if (chatPanel) chatPanel.hidden = true;
       break;
     case UiState.WAITING:
       placeholder.hidden = false;
@@ -154,6 +170,7 @@ function applyUiState(next) {
       if (placeholderMsg) placeholderMsg.hidden = true;
       if (sessionCodeDisplay) sessionCodeDisplay.textContent = next.code ?? "";
       if (sessionStatusMsg) sessionStatusMsg.textContent = next.status ?? "";
+      if (chatPanel) chatPanel.hidden = true;
       break;
     case UiState.JOINING:
       placeholder.hidden = false;
@@ -163,9 +180,12 @@ function applyUiState(next) {
         placeholderMsg.hidden = false;
         placeholderMsg.textContent = next.status ?? "";
       }
+      if (chatPanel) chatPanel.hidden = true;
       break;
     case UiState.LIVE:
       placeholder.hidden = true;
+      // Reveal the chat panel (still closed until the user clicks the button)
+      if (chatPanel) chatPanel.hidden = false;
       break;
   }
 }
@@ -309,12 +329,96 @@ function showToast(msg, ms = 2200) {
 }
 
 // ---------------------------------------------------------------------------
+// Chat — RTCDataChannel
+// ---------------------------------------------------------------------------
+
+function setupChatChannel(ch) {
+  ch.onclose = () => { chatChannel = null; };
+  ch.onerror = () => { chatChannel = null; };
+  ch.onmessage = (ev) => {
+    try {
+      const { text, from } = JSON.parse(ev.data);
+      if (typeof text === "string" && text.trim()) {
+        appendChatMsg(text.trim(), from || "Peer", false);
+      }
+    } catch { /* ignore malformed */ }
+  };
+}
+
+function appendChatMsg(text, from, isSelf) {
+  if (!chatMessages) return;
+  const wrap = document.createElement("div");
+  wrap.className = "chat-msg " + (isSelf ? "chat-msg-self" : "chat-msg-peer");
+  const nameEl = document.createElement("span");
+  nameEl.className = "chat-msg-name";
+  nameEl.textContent = isSelf ? "You" : from;
+  const textEl = document.createElement("p");
+  textEl.className = "chat-msg-text";
+  textEl.textContent = text;
+  wrap.append(nameEl, textEl);
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  if (!isSelf && !chatOpen) {
+    chatUnread++;
+    if (chatBadge) {
+      chatBadge.textContent = chatUnread > 9 ? "9+" : String(chatUnread);
+      chatBadge.hidden = false;
+    }
+    // Brief toast preview when chat is closed
+    const preview = text.length > 55 ? text.slice(0, 55) + "…" : text;
+    showToast(`${from}: ${preview}`, 4000);
+  }
+}
+
+function openChat() {
+  chatOpen = true;
+  chatUnread = 0;
+  if (chatPanel) chatPanel.classList.add("open");
+  if (btnChat) btnChat.classList.add("chat-open");
+  if (chatBadge) { chatBadge.hidden = true; chatBadge.textContent = ""; }
+  setTimeout(() => chatInputField?.focus(), 50);
+}
+
+function closeChat() {
+  chatOpen = false;
+  if (chatPanel) chatPanel.classList.remove("open");
+  if (btnChat) btnChat.classList.remove("chat-open");
+}
+
+function toggleChat() {
+  chatOpen ? closeChat() : openChat();
+}
+
+function sendChatMessage() {
+  const text = (chatInputField?.value ?? "").trim();
+  if (!text) return;
+  if (!chatChannel || chatChannel.readyState !== "open") {
+    showToast("Chat not ready yet", 2500);
+    return;
+  }
+  chatChannel.send(JSON.stringify({ text, from: getLocalDisplayName() }));
+  appendChatMsg(text, getLocalDisplayName(), true);
+  if (chatInputField) chatInputField.value = "";
+}
+
+/** Close channel, clear messages, reset badge. Visibility is handled by applyUiState. */
+function cleanupChat() {
+  closeChat();
+  if (chatChannel) { try { chatChannel.close(); } catch { /* ignore */ } chatChannel = null; }
+  chatUnread = 0;
+  if (chatMessages) chatMessages.innerHTML = "";
+  if (chatBadge) { chatBadge.hidden = true; chatBadge.textContent = ""; }
+}
+
+// ---------------------------------------------------------------------------
 // Return to start screen
 // ---------------------------------------------------------------------------
 
 function returnToSessionCreation(opts = {}) {
   const toastMsg = opts.toast != null ? opts.toast : "Call ended";
   const toastMs = opts.toastMs != null ? opts.toastMs : 2800;
+  cleanupChat();
   stopTracks();
   clearSessionFromUrl();
   if (canvas.width && canvas.height) ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -601,6 +705,9 @@ async function startAsOfferer() {
   if (!sigWs || sigWs.readyState !== WebSocket.OPEN) return;
   iceBuffer = [];
   pc = makePeerConnection();
+  // Create the data channel before createOffer so it's included in the SDP negotiation
+  chatChannel = pc.createDataChannel("chat", { ordered: true });
+  setupChatChannel(chatChannel);
   addMediaToPeerConnection();
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -612,6 +719,8 @@ async function handleIncomingOffer(sdpText) {
   if (!sigWs || sigWs.readyState !== WebSocket.OPEN) return;
   if (!pc) {
     pc = makePeerConnection();
+    // Receive the chat data channel created by the offerer
+    pc.ondatachannel = (ev) => { chatChannel = ev.channel; setupChatChannel(chatChannel); };
     addMediaToPeerConnection();
   }
   await pc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: sdpText }));
@@ -1042,6 +1151,15 @@ document.addEventListener("visibilitychange", () => {
     audioCtx.resume().catch(() => {});
   }
 });
+
+if (btnChat) btnChat.addEventListener("click", toggleChat);
+if (btnChatClose) btnChatClose.addEventListener("click", closeChat);
+if (chatForm) {
+  chatForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    sendChatMessage();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Boot
