@@ -48,6 +48,9 @@ const TRANSLATIONS = {
     chatNotReady:      "Chat not ready yet",
     fileTooLarge:      "File too large — max 25 MB",
     download:          "Download",
+    connectingServers: "Connecting to session servers…",
+    serverUnreachable: "Could not reach the session servers. Please try again.",
+    retry:             "Retry",
     enterValidCode:    "Enter a valid session code",
     roomFull:          "Invalid or expired session code",
     signalingError:    "Signaling error",
@@ -95,6 +98,9 @@ const TRANSLATIONS = {
     chatNotReady:      "Чат ещё не готов",
     fileTooLarge:      "Файл слишком большой — макс. 25 МБ",
     download:          "Скачать",
+    connectingServers: "Подключение к серверам сессии…",
+    serverUnreachable: "Не удалось подключиться к серверам сессии. Попробуйте ещё раз.",
+    retry:             "Повторить",
     enterValidCode:    "Введите корректный код сессии",
     roomFull:          "Неверный или устаревший код сессии",
     signalingError:    "Ошибка сигнального сервера",
@@ -116,11 +122,15 @@ const TRANSLATIONS = {
 const LANG = (navigator.language || "en").toLowerCase().startsWith("ru") ? "ru" : "en";
 const T = TRANSLATIONS[LANG];
 
-// Production signaling server URL.
-// Set this to your deployed Fly.io address after running `fly deploy`, e.g.:
-//   "wss://vcall-signal.fly.dev"
-// Leave empty to fall back to auto-detection (localhost dev) or ?signal= query param.
-const SIGNAL_URL = "wss://vcall-signal.fly.dev";
+// Signaling servers, tried in parallel — first to confirm wins.
+// Add a second entry (e.g. Koyeb / Railway) for redundancy.
+// Leave the array empty to fall back to ?signal= query param or localhost auto-detection.
+const SIGNAL_URLS = [
+  "wss://vcall-signal.fly.dev",
+  // "wss://your-backup.koyeb.app",
+];
+
+const SERVER_CONNECT_TIMEOUT_MS = 10_000; // ms before we give up on all servers
 
 // ---------------------------------------------------------------------------
 // Triple-buffer swapchain for native frame consumers (window.__vcallSwapchain)
@@ -210,6 +220,12 @@ const btnChatClose = document.getElementById("btn-chat-close");
 const btnAttach = document.getElementById("btn-attach");
 const fileInput = document.getElementById("file-input");
 
+// Server-error panel
+const serverError    = document.getElementById("server-error");
+const serverErrorMsg = document.getElementById("server-error-msg");
+const btnRetryConnect  = document.getElementById("btn-retry-connect");
+const btnCancelConnect = document.getElementById("btn-cancel-connect");
+
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const appEl = document.getElementById("app");
 const controlsEl = document.getElementById("controls");
@@ -246,6 +262,10 @@ let iceBuffer = [];
 let sigConnectTimer = null;
 let sigOpened = false;
 let sigUnreachableToastShown = false;
+/** URL of the signaling server currently in use — embedded in share links. */
+let activeSignalUrl = "";
+/** True when we created the session (vs joining one someone else created). */
+let isHostRole = false;
 
 /** @type {string} */
 let peerDisplayName = "Peer";
@@ -281,10 +301,12 @@ let transferObjectUrls = [];
 // ---------------------------------------------------------------------------
 
 const UiState = Object.freeze({
-  LOBBY:     "lobby",      // no session — show name input + start/join buttons
-  WAITING:   "waiting",    // session created, showing code, waiting for peer
-  JOINING:   "joining",    // typing / loading a join code
-  LIVE:      "live",       // call active (placeholder hidden)
+  LOBBY:             "lobby",             // no session — show name input + start/join buttons
+  CONNECTING:        "connecting",        // racing signaling servers, not yet confirmed
+  SERVER_UNREACHABLE: "server-unreachable", // all servers timed out — show retry button
+  WAITING:           "waiting",           // server confirmed session; showing code, waiting for peer
+  JOINING:           "joining",           // joining someone else's session
+  LIVE:              "live",              // call active (placeholder hidden)
 });
 
 /** @type {{ kind: string, [extra: string]: any }} */
@@ -298,14 +320,39 @@ function applyUiState(next) {
       placeholder.hidden = false;
       if (lobby) lobby.hidden = false;
       if (sessionWaiting) sessionWaiting.hidden = true;
+      if (serverError) serverError.hidden = true;
       if (placeholderMsg) placeholderMsg.hidden = true;
+      if (chatPanel) chatPanel.hidden = true;
+      break;
+    case UiState.CONNECTING:
+      placeholder.hidden = false;
+      if (lobby) lobby.hidden = true;
+      if (sessionWaiting) sessionWaiting.hidden = true;
+      if (serverError) serverError.hidden = true;
+      if (placeholderMsg) {
+        placeholderMsg.hidden = false;
+        placeholderMsg.classList.add("connecting");
+        placeholderMsg.textContent = next.status ?? T.connectingServers;
+      }
+      if (chatPanel) chatPanel.hidden = true;
+      break;
+    case UiState.SERVER_UNREACHABLE:
+      placeholder.hidden = false;
+      if (lobby) lobby.hidden = true;
+      if (sessionWaiting) sessionWaiting.hidden = true;
+      if (placeholderMsg) { placeholderMsg.hidden = true; placeholderMsg.classList.remove("connecting"); }
+      if (serverError) {
+        serverError.hidden = false;
+        if (serverErrorMsg) serverErrorMsg.textContent = T.serverUnreachable;
+      }
       if (chatPanel) chatPanel.hidden = true;
       break;
     case UiState.WAITING:
       placeholder.hidden = false;
       if (lobby) lobby.hidden = true;
       if (sessionWaiting) sessionWaiting.hidden = false;
-      if (placeholderMsg) placeholderMsg.hidden = true;
+      if (serverError) serverError.hidden = true;
+      if (placeholderMsg) { placeholderMsg.hidden = true; placeholderMsg.classList.remove("connecting"); }
       if (sessionCodeDisplay) sessionCodeDisplay.textContent = next.code ?? "";
       if (sessionStatusMsg) sessionStatusMsg.textContent = next.status ?? "";
       if (chatPanel) chatPanel.hidden = true;
@@ -314,14 +361,17 @@ function applyUiState(next) {
       placeholder.hidden = false;
       if (lobby) lobby.hidden = true;
       if (sessionWaiting) sessionWaiting.hidden = true;
+      if (serverError) serverError.hidden = true;
       if (placeholderMsg) {
         placeholderMsg.hidden = false;
+        placeholderMsg.classList.remove("connecting");
         placeholderMsg.textContent = next.status ?? "";
       }
       if (chatPanel) chatPanel.hidden = true;
       break;
     case UiState.LIVE:
       placeholder.hidden = true;
+      if (placeholderMsg) placeholderMsg.classList.remove("connecting");
       // Reveal the chat panel (still closed until the user clicks the button)
       if (chatPanel) chatPanel.hidden = false;
       break;
@@ -355,14 +405,6 @@ function wsHostFromLocation() {
   return h.includes(":") ? `[${h}]` : h;
 }
 
-function signalUrl() {
-  if (SIGNAL_URL) return SIGNAL_URL;
-  const params = new URLSearchParams(location.search);
-  const custom = params.get("signal");
-  if (custom) return custom;
-  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${wsProto}//${wsHostFromLocation()}:8787`;
-}
 
 function signalingUnreachableToast(url) {
   const pageHost = location.hostname || "this computer";
@@ -412,6 +454,9 @@ function buildSessionShareUrl() {
   const u = new URL(location.href);
   u.hash = "";
   u.searchParams.set("session", key);
+  // Embed the winning server URL so link recipients auto-connect to the right server,
+  // even when a backup was used instead of the primary.
+  if (activeSignalUrl) u.searchParams.set("signal", activeSignalUrl);
   return u.toString();
 }
 
@@ -474,6 +519,8 @@ function applyTranslations() {
   if (btnJoinSession)      btnJoinSession.textContent      = T.joinBtn;
   if (btnCopySessionLink)  btnCopySessionLink.textContent  = T.copyLink;
   if (btnCancelSession)    btnCancelSession.textContent    = T.cancel;
+  if (btnRetryConnect)     btnRetryConnect.textContent     = T.retry;
+  if (btnCancelConnect)    btnCancelConnect.textContent    = T.cancel;
   if (displayNameInput)    displayNameInput.placeholder    = T.namePlaceholder;
   if (joinCodeInput)       joinCodeInput.placeholder       = T.sessionCodePlaceholder;
   if (chatInputField)      chatInputField.placeholder      = T.messagePlaceholder;
@@ -899,6 +946,8 @@ async function sendFile(file) {
 function returnToSessionCreation(opts = {}) {
   const toastMsg = opts.toast != null ? opts.toast : T.callEnded;
   const toastMs = opts.toastMs != null ? opts.toastMs : 2800;
+  activeSignalUrl = "";
+  isHostRole = false;
   cleanupChat();
   stopTracks();
   clearSessionFromUrl();
@@ -1239,50 +1288,154 @@ async function handleIncomingIce(candidate) {
 // Signaling WebSocket
 // ---------------------------------------------------------------------------
 
-function connectSignaling() {
-  const room = getSessionFromUrl();
-  if (!room) {
-    showToast("No session — start or join a session first.", 4000);
-    return;
-  }
-  teardownPeerConnection();
-  updateCallControlsVisibility();
-  const url = signalUrl();
-  setRtcStatus(`Signaling: connecting… (${url})`); // URL kept for debug; not translated
-  try {
-    sigWs = new WebSocket(url);
-  } catch {
-    showSignalingUnreachableOnce(url);
-    setRtcStatus("Signaling unreachable");
-    updateCallControlsVisibility();
-    return;
-  }
+// ---------------------------------------------------------------------------
+// Signaling URL helpers
+// ---------------------------------------------------------------------------
 
-  sigOpened = false;
+/**
+ * Returns all signaling server URLs to try, in priority order.
+ * If the URL has an explicit ?signal= param (e.g. from a share link), only that
+ * URL is used — it was already proven to work when the host joined.
+ */
+function allSignalUrls() {
+  // A share link carries the exact server the host used — honour it exclusively.
+  const explicit = new URLSearchParams(location.search).get("signal");
+  if (explicit) return [explicit];
+
+  // Deduplicate in case someone accidentally listed the same URL twice.
+  const unique = [...new Set(SIGNAL_URLS.filter(Boolean))];
+  if (unique.length) return unique;
+
+  // Local development fallback
+  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+  return [`${wsProto}//${wsHostFromLocation()}:8787`];
+}
+
+/**
+ * Opens WebSocket connections to all configured signaling servers in parallel.
+ * Resolves with { ws, url, peers } for the first server that sends a "joined" ACK.
+ * Prefers the server that already has the other peer (peers === 2) so manual-code
+ * joiners land on the correct server even without a share link.
+ * Rejects with an Error if the timeout fires before any server responds.
+ */
+function raceSignalingConnect(room) {
+  const urls = allSignalUrls();
+  return new Promise((resolve, reject) => {
+    if (!urls.length) { reject(new Error("no-servers")); return; }
+
+    let done = false;
+    /** Sockets not yet accounted for (no "joined" ack and not yet failed). */
+    const pending = new Set();
+    let bestResult = null; // { ws, url, peers }
+
+    const giveUpTimer = setTimeout(() => {
+      if (!done) finalize();
+    }, SERVER_CONNECT_TIMEOUT_MS);
+
+    const finalize = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(giveUpTimer);
+      pending.forEach((ws) => { try { ws.close(); } catch { /* ignore */ } });
+      pending.clear();
+      if (bestResult) resolve(bestResult);
+      else reject(new Error("all-failed"));
+    };
+
+    /**
+     * Called once per socket when it either delivers a "joined" ACK or fails.
+     * result = { ws, url, peers } on success, null on failure.
+     */
+    const account = (ws, result) => {
+      if (!pending.has(ws)) return; // already counted
+      pending.delete(ws);
+
+      if (result) {
+        if (!bestResult || result.peers > bestResult.peers) {
+          // This server is better — demote the previous best
+          if (bestResult) try { bestResult.ws.close(); } catch { /* ignore */ }
+          bestResult = result;
+        } else {
+          // Already have an equally-good or better candidate — close this one
+          try { ws.close(); } catch { /* ignore */ }
+        }
+        // Resolve immediately if this server already has both peers
+        if (bestResult.peers >= 2) { finalize(); return; }
+      } else {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+      // If every server has replied, use whatever we have (even peers: 1)
+      if (pending.size === 0) finalize();
+    };
+
+    urls.forEach((url) => {
+      let ws;
+      try { ws = new WebSocket(url); } catch {
+        // Synchronous failure (malformed URL etc.) — count as immediate failure
+        // Use a dummy object so account() can dequeue it
+        const dummy = { _dummy: true };
+        pending.add(dummy);
+        account(dummy, null);
+        return;
+      }
+      pending.add(ws);
+
+      ws.onopen = () => {
+        if (done) { ws.close(); return; }
+        ws.send(JSON.stringify({ type: "join", room }));
+      };
+
+      ws.onmessage = (ev) => {
+        if (done || !pending.has(ws)) return;
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "joined") {
+            account(ws, { ws, url, peers: msg.peers });
+          } else if (msg.type === "error") {
+            // room full or other fatal error from this server
+            account(ws, null);
+            if (msg.message === "room full" && !done) {
+              finalize(); // resolves to null → rejects; special handling below
+              reject(new Error("room-full")); // overwrite with specific error
+            }
+          }
+        } catch { /* ignore */ }
+      };
+
+      ws.onerror = () => { /* rely on onclose */ };
+      ws.onclose  = () => { account(ws, null); };
+    });
+  });
+}
+
+/**
+ * Attaches all message / close handlers to a WebSocket that has already been
+ * opened and received a "joined" ACK.  Transitions the UI out of CONNECTING.
+ */
+function finishSignalingSetup(ws, url, initialPeers) {
+  sigWs = ws;
+  sigOpened = true;
   sigUnreachableToastShown = false;
+  activeSignalUrl = url;
   clearSigTimers();
-  sigConnectTimer = setTimeout(() => {
-    if (!sigOpened && sigWs && sigWs.readyState !== WebSocket.OPEN) {
-      showSignalingUnreachableOnce(url);
-      setRtcStatus(T.rtcUnreachable);
-      try { sigWs.close(); } catch { /* ignore */ }
-    }
-    sigConnectTimer = null;
-  }, SIG_CONNECT_TIMEOUT_MS);
+  sendPeerInfo();
 
-  sigWs.onopen = () => {
-    sigOpened = true;
-    clearSigTimers();
-    sigWs.send(JSON.stringify({ type: "join", room }));
-    sendPeerInfo();
-    updateCallControlsVisibility();
-  };
+  // Transition out of CONNECTING — show the session panel or joining status
+  if (isHostRole) {
+    const code = getSessionFromUrl();
+    applyUiState({ kind: UiState.WAITING, code, status: initialPeers >= 2 ? T.connecting : T.waitingForPeer });
+  } else {
+    applyUiState({ kind: UiState.JOINING, status: initialPeers >= 2 ? T.connecting : T.waitingForPeer });
+  }
+  setRtcStatus(initialPeers >= 2 ? T.rtcPairing : T.rtcWaiting);
+  updateCallControlsVisibility();
 
-  sigWs.onmessage = async (ev) => {
+  ws.onmessage = async (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
 
     if (msg.type === "joined") {
+      // Re-join ACK (shouldn't happen in normal flow; guard anyway)
       if (msg.peers < 2) setWaitingStatus(T.waitingForPeer);
       setRtcStatus(msg.peers < 2 ? T.rtcWaiting : T.rtcPairing);
       return;
@@ -1310,14 +1463,14 @@ function connectSignaling() {
       returnToSessionCreation({ toast: T.peerLeft, toastMs: 3800 });
       return;
     }
-    if (msg.type === "offer" && msg.sdp) { await handleIncomingOffer(msg.sdp); return; }
-    if (msg.type === "answer" && msg.sdp) { await handleIncomingAnswer(msg.sdp); return; }
-    if (msg.type === "ice") await handleIncomingIce(msg.candidate);
+    if (msg.type === "offer"  && msg.sdp)       { await handleIncomingOffer(msg.sdp); return; }
+    if (msg.type === "answer" && msg.sdp)       { await handleIncomingAnswer(msg.sdp); return; }
+    if (msg.type === "ice")                      { await handleIncomingIce(msg.candidate); }
   };
 
-  sigWs.onerror = () => { /* rely on onclose + timeout */ };
+  ws.onerror = () => { /* rely on onclose */ };
 
-  sigWs.onclose = () => {
+  ws.onclose = () => {
     clearSigTimers();
     sigWs = null;
     if (!sigOpened) {
@@ -1328,6 +1481,43 @@ function connectSignaling() {
     }
     updateCallControlsVisibility();
   };
+}
+
+/**
+ * Main entry point for establishing (or re-establishing) the signaling connection.
+ * Shows CONNECTING state while racing servers, then transitions to WAITING/JOINING
+ * on success or SERVER_UNREACHABLE on timeout.
+ */
+async function connectSignaling() {
+  const room = getSessionFromUrl();
+  if (!room) return;
+
+  teardownPeerConnection();
+  applyUiState({ kind: UiState.CONNECTING, status: T.connectingServers });
+  updateCallControlsVisibility();
+
+  let result;
+  try {
+    result = await raceSignalingConnect(room);
+  } catch (err) {
+    // User may have cancelled (navigated away) while we were waiting
+    if (!getSessionFromUrl()) return;
+    if (err.message === "room-full") {
+      returnToSessionCreation({ toast: T.roomFull, toastMs: 5000 });
+    } else {
+      applyUiState({ kind: UiState.SERVER_UNREACHABLE });
+      updateCallControlsVisibility();
+    }
+    return;
+  }
+
+  // Guard: user cancelled while the race was in flight
+  if (!getSessionFromUrl()) {
+    try { result.ws.close(); } catch { /* ignore */ }
+    return;
+  }
+
+  finishSignalingSetup(result.ws, result.url, result.peers);
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,12 +1734,14 @@ function waitForVideoMetadata(el) {
 
 async function startSession() {
   if (getSessionFromUrl()) return;
+  isHostRole = true;
   const key = generateSessionKey();
   setSessionInUrl(key);
-  applyUiState({ kind: UiState.WAITING, code: key, status: T.startingMic });
-  const micOk = await startMic();
-  setWaitingStatus(micOk ? T.connectingSignaling : T.noMic);
-  connectSignaling();
+  // Start mic in parallel with server connection; not blocking
+  const micPromise = startMic();
+  await connectSignaling();
+  const micOk = await micPromise;
+  if (uiState.kind === UiState.WAITING && !micOk) setWaitingStatus(T.noMic);
 }
 
 async function joinSession() {
@@ -1560,11 +1752,14 @@ async function joinSession() {
     return;
   }
   if (getSessionFromUrl() === code) return;
+  isHostRole = false;
   setSessionInUrl(code);
-  applyUiState({ kind: UiState.JOINING, status: T.startingMic });
-  const micOk = await startMic();
-  if (!micOk) setWaitingStatus(T.noMic);
-  connectSignaling();
+  const micPromise = startMic();
+  await connectSignaling();
+  const micOk = await micPromise;
+  if ((uiState.kind === UiState.JOINING || uiState.kind === UiState.WAITING) && !micOk) {
+    setWaitingStatus(T.noMic);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1655,6 +1850,9 @@ if (chatForm) {
     sendChatMessage();
   });
 }
+if (btnRetryConnect)  btnRetryConnect.addEventListener("click",  () => connectSignaling());
+if (btnCancelConnect) btnCancelConnect.addEventListener("click", () => returnToSessionCreation({ toast: "" }));
+
 if (btnAttach) btnAttach.addEventListener("click", () => fileInput?.click());
 if (fileInput) {
   fileInput.addEventListener("change", () => {

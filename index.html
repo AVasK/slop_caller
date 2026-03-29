@@ -106,6 +106,16 @@
               <button type="button" id="btn-cancel-session" class="btn-lobby-text">Cancel</button>
             </div>
 
+            <!-- Server unreachable: all signaling servers failed to respond -->
+            <div id="server-error" class="server-error-panel" hidden>
+              <p class="server-error-icon">⚠</p>
+              <p id="server-error-msg" class="session-status-msg"></p>
+              <div class="lobby-actions">
+                <button type="button" id="btn-retry-connect" class="btn-lobby-primary">Retry</button>
+                <button type="button" id="btn-cancel-connect" class="btn-lobby-text">Cancel</button>
+              </div>
+            </div>
+
             <!-- Plain status line: shown when joining someone else's session -->
             <p id="placeholder-msg" hidden></p>
           </div>
